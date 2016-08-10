@@ -13,6 +13,7 @@ var excludedPokemon = [];
 
 var $selectNotify = $("#notify-pokemon");
 var notifyPokemon = [];
+var canNotify = !!window.Notification;
 
 var map;
 var scanLocations = new Map();
@@ -43,9 +44,12 @@ $selectExclude.on("change", function (e) {
 $selectNotify.on("change", function (e) {
     notifyPokemon = $selectNotify.val().map(Number);
     localStorage.notifyPokemon = JSON.stringify(notifyPokemon);
-
+    if(Notification.permission !== 'granted'){
+        Notification.requestPermission();
+    }
     clearStaleMarkers();
 });
+
 
 
 function getFromStorage(keyName, default_value) {
@@ -81,11 +85,15 @@ $.getJSON("static/locales/pokemon.en.json").done(function(data) {
     });
     $selectExclude.val(excludedPokemon).trigger("change");
 
-    $selectNotify.select2({
-        placeholder: "Type to exclude Pokemon",
-        data: pokeList
-    });
-    $selectNotify.val(notifyPokemon).trigger("change");
+    if(canNotify){
+        $selectNotify.select2({
+            placeholder: "Type to exclude Pokemon",
+            data: pokeList
+        });
+        $selectNotify.val(notifyPokemon).trigger("change");
+    }else{
+        $selectNotify.parentsUntil('p').hide();
+    }
 });
 
 
@@ -200,8 +208,15 @@ function pokemonLabel(name, id, disappear_time, latitude, longitude) {
         <div>\
             <a href='https://www.google.com/maps/dir/Current+Location/"+latitude+","+longitude+"'\
                     target='_blank' title='View in Maps'>Get Directions</a>\
-            <a href='#' onclick='removePokemon(\"" + id + "\")')>Hide " + name + "s</a>\
-        </div>";
+            <a href='#' onclick='removePokemon(\"" + id + "\")')>Hide " + name + "s</a>";
+    if(canNotify){
+        if(notifyPokemon.indexOf(id) < 0){
+            label += " <a href='javascript:;' onclick='toggleNotifyPokemon(\"" + id + "\", true)')>Notify for " + name + "s</a>";
+        }else{
+            label += " <a href='javascript:;' onclick='toggleNotifyPokemon(\"" + id + "\", false)')>Don't notify for " + name + "s</a>";
+        }
+    }
+    label += "</div>";
     return label;
 };
 
@@ -211,6 +226,22 @@ function removePokemon(id) {
     $selectExclude.val(selected);
 
     $selectExclude.change();
+}
+
+function toggleNotifyPokemon(id, enable) {
+    console.log('toggle', id, enable);
+    var selected=$selectNotify.val();
+    if(enable){
+        selected.push(id.toString());
+    }else{
+        selected = $.grep(selected, function(val){
+            console.log(val);
+            return val != id.toString();
+        });
+    }
+    $selectNotify.val(selected);
+
+    $selectNotify.change();
 }
 
 function gymLabel(team_name, team_id, gym_points) {
@@ -414,6 +445,53 @@ function updateScanLocations(updatedScanLocations) {
 
 //               'pokestops': document.getElementById('pokestops-checkbox').checked,
 //               'pokestops-lured': document.getElementById('pokestops-lured-checkbox').checked,
+
+function bounceMarker(marker, num){
+    num = num || 4;
+    marker.setAnimation(google.maps.Animation.BOUNCE);
+    setTimeout(function(){
+        marker.setAnimation(null);
+    }, 1000 * num + 100);
+}
+
+function sendNotifications (notifications){
+    var notificationIcon, notificationTitle, notificationPid, notificationMarkers, notificationsLength;
+    if(canNotify && (notificationsLength = Object.keys(notifications).length) ){
+        notificationMarkers = [];
+        if(notificationsLength === 1){
+            notificationPid = Object.keys(notifications).shift();
+            notificationIcon = document.location.origin+'/static/icons/'+notificationPid+'.png';
+            notificationTitle = notifications[notificationPid].pokemon_name + ' appeared on map.';
+            notificationMarkers.push(notifications[notificationPid].marker);
+        }else{
+            notificationIcon = document.location.origin+'/static/favicon.ico';
+            notificationTitle = notificationsLength+' watched pokémons appeared on map.';
+            for(notificationPid in notifications){
+                if(!notifications.hasOwnProperty(notificationPid)){
+                    continue;
+                }
+                notificationMarkers.push(notifications[notificationPid].marker);
+            }
+        }
+
+        Notification.requestPermission(function(permission){
+            if(permission !== 'granted'){
+                return;
+            }
+            var notification = new Notification(notificationTitle, {icon: notificationIcon});
+
+            notification.onclick = function(){
+                for (var i = 0; i < notificationMarkers.length; i++) {
+                    bounceMarker(notificationMarkers[i]);
+                }
+            };
+        });
+
+       notifications = {};
+       notificationsLength = 0;
+    }
+}
+
 function updateMap() {
     $.ajax({
         url: "map-data",
@@ -423,8 +501,6 @@ function updateMap() {
         dataType: "json"
     }).done(function(result) {
         var notifications = {};
-        var notificationsLength = 0;
-        var notificationIcon, notificationTitle, notificationPid;
 
         statusLabels(result["server_status"]);
 
@@ -446,30 +522,7 @@ function updateMap() {
             }
         });
 
-
-
-        if(notificationsLength = Object.keys(notifications).length){
-
-           if(notificationsLength === 1){
-                notificationPid = Object.keys(notifications).shift();
-                notificationIcon = document.location.origin+'/static/icons/'+notificationPid+'.png';
-                notificationTitle = notifications[notificationPid].pokemon_name + ' appeared on map.';
-           }else{
-                notificationIcon = document.location.origin+'/static/favicon.ico';
-                notificationTitle = notificationsLength+' watched pokémons appeared on map.';
-           }
-
-           Notification.requestPermission(function(permission){
-                if(permission !== 'granted'){
-                    return;
-                }
-
-                new Notification(notificationTitle, {icon: notificationIcon});
-            });
-
-           notifications = {};
-           notificationsLength = 0;
-        }
+        sendNotifications(notifications);
 
         $.each(result.gyms, function(i, item){
             if (!document.getElementById('gyms-checkbox').checked) {
